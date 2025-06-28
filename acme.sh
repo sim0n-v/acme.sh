@@ -2316,19 +2316,39 @@ _send_signed_request() {
 
 # check when is renewal time
 _check_renewal_window() {
-  cert_id="$1"
+  _cf="$1"
   if [ "$FORCE" ]; then
     return 0
   fi
   if [ ! "$ACME_RENEWAL_INFO" ]; then
     return 0
   fi
-  response=$(_get "$ACME_RENEWAL_INFO/$cert_id" | _json_decode | _normalizeJson)
-  if ! _contains "$response" "start"; then
+  _cert_expiry=$(date -d "$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -enddate -in $_cf | cut -d '=' -f 2)" +%s)
+  _debug3 "Certificate Expiration: $_cert_expiry"
+  if [ "$(_time)" -ge "$_cert_expiry" ]; then
+    _err "Current certificate expired since: $(_time2str $_cert_expiry)."
+    _info "Renew using $(__green "--force")."
+    return 1
+  fi
+  _cert_serial=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -serial -in "$_cf" | cut -d '=' -f 2 | _h2b | _base64 | _url_replace)
+  _debug3 "Certificate Serial Number: $_cert_serial"
+  _cert_authority_kid=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -text -in "$_cf" | grep -i "authority key id" -A 1 | _tail_n 1 | _egrep_o "[A-F0-9:]+" | _tail_c +7 | tr -d ':' | _h2b | _base64 | _url_replace)
+  _debug3 "Certificate Authority Key Identifier: $_cert_authority_kid"
+  _cert_id="$_cert_authority_kid.$_cert_serial"
+  _debug2 "Certificate ID for Renewal Info: $_cert_id"
+  response=$(_get "$ACME_RENEWAL_INFO/$_cert_id" | _json_decode | _normalizeJson)
+  if ! _contains "$response" "\"start\"" || ! _contains "$response" "\"end\""; then
     return 1
   fi
   _window_start_time=$(_date2time "$(echo $response | _egrep_o '"start":"[^"]+"' | cut -d '"' -f 4)")
-  if [ $(_time) -le $_window_start_time ]; then
+  _window_end_time=$(_date2time "$(echo $response | _egrep_o '"end":"[^"]+"' | cut -d '"' -f 4)")
+  _debug "Renewal Info Window: Start at $_window_start_time"
+  _debug "Renewal Info Window: End at   $_window_end_time"
+  if [ "$_window_start_time" -gt "$_window_end_time" ]; then
+    _err "Malformed Renewal Info: window begins at $(_time2str "$_window_start_time") and ends at $(_time2str "$_window_end_time")"
+    return 1
+  fi
+  if [ "$(_time)" -le "$_window_start_time" ]; then
     _info "Skipping. Next renewal time is: $(__green "$(_time2str "$_window_start_time")")"
     _info "Add '$(__red '--force')' to force renewal."
     return 1
@@ -3742,12 +3762,6 @@ __calc_account_thumbprint() {
   printf "%s" "$jwk" | tr -d ' ' | _digest "sha256" | _url_replace
 }
 
-_calc_cert_id() {
-  _cf="$1"
-  _cert_serial=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -serial -in "$_cf" | cut -d '=' -f 2 | _h2b | _base64 | _url_replace)
-  _cert_authority=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -text -in "$_cf" | grep -i "authority key id" -A 1 | _tail_n 1 | _egrep_o "keyid:[A-Fa-f0-9:]+" | _tail_c +7 | tr -d ':' | _h2b | _base64 | _url_replace)
-}
-
 _getAccountEmail() {
   if [ "$ACCOUNT_EMAIL" ]; then
     echo "$ACCOUNT_EMAIL"
@@ -4509,7 +4523,7 @@ issue() {
     return 1
   fi
 
-  if [ -f "$DOMAIN_CONF" ] && [ ! "$_no_ari" ] && ! _check_renewal_window $(_calc_cert_id $CERT_PATH); then
+  if [ -f "$DOMAIN_CONF" ] && [ ! "$_no_ari" ] && ! _check_renewal_window "$CERT_PATH"; then
     return $RENEW_SKIP
   fi
   _savedomainconf "Le_Domain" "$_main_domain"
