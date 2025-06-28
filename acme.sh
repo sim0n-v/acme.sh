@@ -4472,7 +4472,6 @@ issue() {
   if ! _initAPI; then
     return 1
   fi
-  exit 0
 
   _savedomainconf "Le_Domain" "$_main_domain"
   _savedomainconf "Le_Alt" "$_alt_domains"
