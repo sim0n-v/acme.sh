@@ -2333,6 +2333,11 @@ _check_renewal_window() {
     _info "Add '$(__red '--force')' to force renewal."
     return 1
   fi
+  if _contains "$response" "explanationURL"; then
+    _renewal_explanation="$(echo $response | _egrep_o '"explanationURL":"[^"]+"' | cut -d '"' -f 4)"
+    _info "Renewal required with reason: $(__green "$_renewal_explanation")"
+    _log "Renewal required with reason: $_renewal_explanation"
+  fi
   return 0
 }
 
