@@ -2332,7 +2332,7 @@ _check_renewal_window() {
   fi
   _cert_serial=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -serial -in "$_cf" | cut -d '=' -f 2 | _h2b | _base64 | _url_replace)
   _debug3 "Certificate Serial Number: $_cert_serial"
-  _cert_authority_kid=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -text -in "$_cf" | grep -i "authority key id" -A 1 | _tail_n 1 | _egrep_o "[A-F0-9:]+" | _tail_c +7 | tr -d ':' | _h2b | _base64 | _url_replace)
+  _cert_authority_kid=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -text -in "$_cf" | grep -i "authority key id" -A 1 | _tail_n 1 | _egrep_o "[A-F0-9:]+" | tr -d ':' | _h2b | _base64 | _url_replace)
   _debug3 "Certificate Authority Key Identifier: $_cert_authority_kid"
   _cert_id="$_cert_authority_kid.$_cert_serial"
   _debug2 "Certificate ID for Renewal Info: $_cert_id"
@@ -2341,15 +2341,17 @@ _check_renewal_window() {
     return 1
   fi
   _window_start_time=$(_date2time "$(echo $response | _egrep_o '"start":"[^"]+"' | cut -d '"' -f 4)")
+  _window_start_time_str=$(_time2str "$_window_start_time")
   _window_end_time=$(_date2time "$(echo $response | _egrep_o '"end":"[^"]+"' | cut -d '"' -f 4)")
+  _window_end_time_str=$(_time2str "$_window_end_time")
   _debug "Renewal Info Window: Start at $_window_start_time"
   _debug "Renewal Info Window: End at   $_window_end_time"
   if [ "$_window_start_time" -gt "$_window_end_time" ]; then
-    _err "Malformed Renewal Info: window begins at $(_time2str "$_window_start_time") and ends at $(_time2str "$_window_end_time")"
+    _err "Malformed Renewal Info: window begins at $_window_start_time_str and ends at $_window_end_time_str"
     return 1
   fi
   if [ "$(_time)" -le "$_window_start_time" ]; then
-    _info "Skipping. Next renewal time is: $(__green "$(_time2str "$_window_start_time")")"
+    _info "Skipping. Next renewal time is: $(__green "$_window_start_time_str")"
     _info "Add '$(__red '--force')' to force renewal."
     return 1
   fi
@@ -4685,6 +4687,9 @@ issue() {
     if [ "$_notAfter" ]; then
       _newOrderObj="$_newOrderObj,\"notAfter\": \"$_notAfter\""
     fi
+    if [ "$_ACME_IS_RENEW" ]; then
+      _newOrderObj="$_newOrderObj,\"replaces\": \"$_cert_id\""
+    fi
     _debug "STEP 1, Ordering a Certificate"
     if ! _send_signed_request "$ACME_NEW_ORDER" "$_newOrderObj}"; then
       _err "Error creating new order."
@@ -5519,14 +5524,17 @@ renew() {
   case "$Le_API" in
   "$CA_LETSENCRYPT_V2_TEST")
     _info "Switching back to $CA_LETSENCRYPT_V2"
+    _ACME_IS_RENEW=""
     Le_API="$CA_LETSENCRYPT_V2"
     ;;
   "$CA_BUYPASS_TEST")
     _info "Switching back to $CA_BUYPASS"
+    _ACME_IS_RENEW=""
     Le_API="$CA_BUYPASS"
     ;;
   "$CA_GOOGLE_TEST")
     _info "Switching back to $CA_GOOGLE"
+    _ACME_IS_RENEW=""
     Le_API="$CA_GOOGLE"
     ;;
   esac
