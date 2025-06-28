@@ -2753,6 +2753,7 @@ _clearAPI() {
   ACME_NEW_AUTHZ=""
   ACME_NEW_ORDER=""
   ACME_REVOKE_CERT=""
+  ACME_RENEWAL_INFO=""
   ACME_NEW_NONCE=""
   ACME_AGREEMENT=""
 }
@@ -2790,6 +2791,9 @@ _initAPI() {
     ACME_NEW_ACCOUNT=$(echo "$response" | _egrep_o 'newAccount" *: *"[^"]*"' | cut -d '"' -f 3)
     export ACME_NEW_ACCOUNT
 
+    ACME_RENEWAL_INFO=$(echo "$response" | _egrep_o 'renewalInfo" *: *"[^"]*"' | cut -d '"' -f 3)
+    export ACME_RENEWAL_INFO
+
     ACME_REVOKE_CERT=$(echo "$response" | _egrep_o 'revokeCert" *: *"[^"]*"' | cut -d '"' -f 3)
     export ACME_REVOKE_CERT
 
@@ -2803,6 +2807,7 @@ _initAPI() {
     _debug "ACME_NEW_AUTHZ" "$ACME_NEW_AUTHZ"
     _debug "ACME_NEW_ORDER" "$ACME_NEW_ORDER"
     _debug "ACME_NEW_ACCOUNT" "$ACME_NEW_ACCOUNT"
+    _debug "ACME_RENEWAL_INFO" "$ACME_RENEWAL_INFO"
     _debug "ACME_REVOKE_CERT" "$ACME_REVOKE_CERT"
     _debug "ACME_AGREEMENT" "$ACME_AGREEMENT"
     _debug "ACME_NEW_NONCE" "$ACME_NEW_NONCE"
@@ -4467,6 +4472,7 @@ issue() {
   if ! _initAPI; then
     return 1
   fi
+  exit 0
 
   _savedomainconf "Le_Domain" "$_main_domain"
   _savedomainconf "Le_Alt" "$_alt_domains"
@@ -7331,6 +7337,7 @@ _process() {
   _tlsport=""
   _dnssleep=""
   _listraw=""
+  _noari=""
   _stopRenewOnError=""
   #_insecure=""
   _ca_bundle=""
@@ -7673,6 +7680,9 @@ _process() {
       _days="$2"
       Le_RenewalDays="$_days"
       shift
+      ;;
+    --no-ari)
+      _noari="1"
       ;;
     --valid-from)
       _valid_from="$2"
