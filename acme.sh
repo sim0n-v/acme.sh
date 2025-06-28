@@ -2314,6 +2314,28 @@ _send_signed_request() {
 
 }
 
+# check when is renewal time
+_check_renewal_window() {
+  cert_id="$1"
+  if [ "$FORCE" ]; then
+    return 0
+  fi
+  if [ ! "$ACME_RENEWAL_INFO" ]; then
+    return 0
+  fi
+  response=$(_get "$ACME_RENEWAL_INFO/$cert_id" | _json_decode | _normalizeJson)
+  if ! _contains "$response" "start"; then
+    return 1
+  fi
+  _window_start_time=$(_date2time "$(echo $response | _egrep_o '"start":"[^"]+"' | cut -d '"' -f 4)")
+  if [ $(_time) -le $_window_start_time ]; then
+    _info "Skipping. Next renewal time is: $(__green "$(_time2str "$_window_start_time")")"
+    _info "Add '$(__red '--force')' to force renewal."
+    return 1
+  fi
+  return 0
+}
+
 #setopt "file"  "opt"  "="  "value" [";"]
 _setopt() {
   __conf="$1"
@@ -3715,6 +3737,12 @@ __calc_account_thumbprint() {
   printf "%s" "$jwk" | tr -d ' ' | _digest "sha256" | _url_replace
 }
 
+_calc_cert_id() {
+  _cf="$1"
+  _cert_serial=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -serial -in "$_cf" | cut -d '=' -f 2 | _h2b | _base64 | _url_replace)
+  _cert_authority=$(${ACME_OPENSSL_BIN:-openssl} x509 -noout -text -in "$_cf" | grep -i "authority key id" -A 1 | _tail_n 1 | _egrep_o "keyid:[A-Fa-f0-9:]+" | _tail_c +7 | tr -d ':' | _h2b | _base64 | _url_replace)
+}
+
 _getAccountEmail() {
   if [ "$ACCOUNT_EMAIL" ]; then
     echo "$ACCOUNT_EMAIL"
@@ -4421,6 +4449,7 @@ issue() {
   _preferred_chain="${15}"
   _valid_from="${16}"
   _valid_to="${17}"
+  _no_ari="${18}"
 
   if [ -z "$_ACME_IS_RENEW" ]; then
     _initpath "$_main_domain" "$_key_length"
@@ -4439,7 +4468,9 @@ issue() {
   if [ -f "$DOMAIN_CONF" ]; then
     Le_NextRenewTime=$(_readdomainconf Le_NextRenewTime)
     _debug Le_NextRenewTime "$Le_NextRenewTime"
-    if [ -z "$FORCE" ] && [ "$Le_NextRenewTime" ] && [ "$(_time)" -lt "$Le_NextRenewTime" ]; then
+    Le_DisableRenewalInfo=$(_readdomainconf Le_DisableRenewalInfo)
+    _debug Le_DisableRenewalInfo "$Le_DisableRenewalInfo"
+    if [ -z "$FORCE" ] && [ "$Le_DisableRenewalInfo" ] && [ "$Le_NextRenewTime" ] && [ "$(_time)" -lt "$Le_NextRenewTime" ]; then
       _valid_to_saved=$(_readdomainconf Le_Valid_to)
       if [ "$_valid_to_saved" ] && ! _startswith "$_valid_to_saved" "+"; then
         _info "The domain is set to be valid to: $_valid_to_saved"
@@ -4473,6 +4504,9 @@ issue() {
     return 1
   fi
 
+  if [ -f "$DOMAIN_CONF" ] && [ ! "$_no_ari" ] && ! _check_renewal_window $(_calc_cert_id $CERT_PATH); then
+    return $RENEW_SKIP
+  fi
   _savedomainconf "Le_Domain" "$_main_domain"
   _savedomainconf "Le_Alt" "$_alt_domains"
   _savedomainconf "Le_Webroot" "$_web_roots"
@@ -4495,6 +4529,11 @@ issue() {
     _savedomainconf "Le_Preferred_Chain" "$_preferred_chain" "base64"
   else
     _cleardomainconf "Le_Preferred_Chain"
+  fi
+  if [ "$_no_ari" ] || [ ! "$ACME_RENEWAL_INFO" ] ; then
+    _savedomainconf "Le_DisableRenewalInfo" "$_no_ari"
+  else
+    _cleardomainconf "Le_DisableRenewalInfo"
   fi
 
   Le_API="$ACME_DIRECTORY"
@@ -5486,7 +5525,7 @@ renew() {
   _debug2 "initpath again."
   _initpath "$Le_Domain" "$_isEcc"
 
-  if [ -z "$FORCE" ] && [ "$Le_NextRenewTime" ] && [ "$(_time)" -lt "$Le_NextRenewTime" ]; then
+  if [ -z "$FORCE" ] && [ "$Le_DisableRenewalInfo" ] && [ "$Le_NextRenewTime" ] && [ "$(_time)" -lt "$Le_NextRenewTime" ]; then
     _info "Skipping. Next renewal time is: $(__green "$Le_NextRenewTimeStr")"
     _info "Add '$(__red '--force')' to force renewal."
     if [ -z "$_ACME_IN_RENEWALL" ]; then
@@ -5522,7 +5561,7 @@ renew() {
       _cleardomainconf Le_OCSP_Staple
     fi
   fi
-  issue "$Le_Webroot" "$Le_Domain" "$Le_Alt" "$Le_Keylength" "$Le_RealCertPath" "$Le_RealKeyPath" "$Le_RealCACertPath" "$Le_ReloadCmd" "$Le_RealFullChainPath" "$Le_PreHook" "$Le_PostHook" "$Le_RenewHook" "$Le_LocalAddress" "$Le_ChallengeAlias" "$Le_Preferred_Chain" "$Le_Valid_From" "$Le_Valid_To"
+  issue "$Le_Webroot" "$Le_Domain" "$Le_Alt" "$Le_Keylength" "$Le_RealCertPath" "$Le_RealKeyPath" "$Le_RealCACertPath" "$Le_ReloadCmd" "$Le_RealFullChainPath" "$Le_PreHook" "$Le_PostHook" "$Le_RenewHook" "$Le_LocalAddress" "$Le_ChallengeAlias" "$Le_Preferred_Chain" "$Le_Valid_From" "$Le_Valid_To" "$_no_ari"
   res="$?"
   if [ "$res" != "0" ]; then
     return "$res"
@@ -7336,7 +7375,7 @@ _process() {
   _tlsport=""
   _dnssleep=""
   _listraw=""
-  _noari=""
+  _no_ari=""
   _stopRenewOnError=""
   #_insecure=""
   _ca_bundle=""
@@ -7681,7 +7720,7 @@ _process() {
       shift
       ;;
     --no-ari)
-      _noari="1"
+      _no_ari="1"
       ;;
     --valid-from)
       _valid_from="$2"
@@ -7966,7 +8005,7 @@ _process() {
   uninstall) uninstall "$_nocron" ;;
   upgrade) upgrade ;;
   issue)
-    issue "$_webroot" "$_domain" "$_altdomains" "$_keylength" "$_cert_file" "$_key_file" "$_ca_file" "$_reloadcmd" "$_fullchain_file" "$_pre_hook" "$_post_hook" "$_renew_hook" "$_local_address" "$_challenge_alias" "$_preferred_chain" "$_valid_from" "$_valid_to"
+    issue "$_webroot" "$_domain" "$_altdomains" "$_keylength" "$_cert_file" "$_key_file" "$_ca_file" "$_reloadcmd" "$_fullchain_file" "$_pre_hook" "$_post_hook" "$_renew_hook" "$_local_address" "$_challenge_alias" "$_preferred_chain" "$_valid_from" "$_valid_to" "$_no_ari"
     ;;
   deploy)
     deploy "$_domain" "$_deploy_hook" "$_ecc"
